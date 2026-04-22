@@ -291,3 +291,115 @@ async fn extra_claims_captured() {
     assert_eq!(result.extra.get("custom_field").unwrap(), "custom_value");
     assert_eq!(result.extra.get("role").unwrap(), "admin");
 }
+
+// =========================================================
+// ES256 happy path — exercises the EC (P-256) branch of the
+// JWKS parser and jsonwebtoken's ECDSA verification path.
+// =========================================================
+
+fn generate_ec_keypair(kid: &str) -> (String, serde_json::Value) {
+    use p256::SecretKey;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::pkcs8::{EncodePrivateKey, LineEnding};
+
+    // Reuse the rand_core 0.6 OsRng surfaced by rsa — p256 0.13 is
+    // built against the same rand_core version, so no version skew.
+    let mut rng = rsa::rand_core::OsRng;
+    let secret = SecretKey::random(&mut rng);
+
+    let pem = secret
+        .to_pkcs8_pem(LineEnding::LF)
+        .expect("encode PKCS#8 PEM")
+        .to_string();
+
+    // Uncompressed SEC1 encoding: 0x04 || X (32 bytes) || Y (32 bytes).
+    let encoded = secret.public_key().to_encoded_point(false);
+    let bytes = encoded.as_bytes();
+    assert_eq!(bytes[0], 0x04, "expected uncompressed point prefix");
+    assert_eq!(bytes.len(), 65, "expected 65-byte uncompressed P-256 point");
+    let x = &bytes[1..33];
+    let y = &bytes[33..65];
+
+    use base64::Engine;
+    let x_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(x);
+    let y_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(y);
+
+    let jwks = json!({
+        "keys": [{
+            "kty": "EC",
+            "kid": kid,
+            "alg": "ES256",
+            "crv": "P-256",
+            "x": x_b64,
+            "y": y_b64,
+        }]
+    });
+
+    (pem, jwks)
+}
+
+fn sign_ec_token(private_pem: &str, kid: &str, claims: &serde_json::Value) -> String {
+    let encoding_key = EncodingKey::from_ec_pem(private_pem.as_bytes()).unwrap();
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some(kid.to_string());
+    jsonwebtoken::encode(&header, claims, &encoding_key).unwrap()
+}
+
+#[tokio::test]
+async fn valid_es256_token_returns_claims() {
+    let (pem, jwks) = generate_ec_keypair("ec-key-1");
+    let server = setup_jwks_server(&jwks).await;
+
+    let validator = JwtValidator::new(
+        format!("{}/{}", server.uri(), ".well-known/jwks.json"),
+        "test-audience",
+    )
+    .with_refresh_interval(Duration::from_millis(100));
+
+    let claims = json!({
+        "sub": "user-ec",
+        "aud": "test-audience",
+        "exp": now_epoch() + 3600,
+    });
+
+    let token = sign_ec_token(&pem, "ec-key-1", &claims);
+    let result = validator.validate(&token).await.unwrap();
+    assert_eq!(result.sub, "user-ec");
+}
+
+// =========================================================
+// HS256 (symmetric) → UnsupportedAlgorithm. Defends against
+// algorithm-confusion attacks where an attacker submits an
+// HS256-signed token using a public key as the HMAC secret.
+// =========================================================
+
+#[tokio::test]
+async fn unsupported_algorithm_rejected() {
+    let (_pem, jwks) = generate_rsa_keypair("any-kid");
+    let server = setup_jwks_server(&jwks).await;
+
+    let validator = JwtValidator::new(
+        format!("{}/{}", server.uri(), ".well-known/jwks.json"),
+        "test-audience",
+    );
+
+    // Craft an HS256 token — not in the default allowlist [RS256, ES256].
+    let hs_key = EncodingKey::from_secret(b"any-secret");
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some("any-kid".into());
+    let claims = json!({
+        "sub": "attacker",
+        "aud": "test-audience",
+        "exp": now_epoch() + 3600,
+    });
+    let token = jsonwebtoken::encode(&header, &claims, &hs_key).unwrap();
+
+    let err = validator.validate(&token).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            turul_jwt_validator::JwtValidationError::UnsupportedAlgorithm(_)
+        ),
+        "Expected UnsupportedAlgorithm, got: {err:?}"
+    );
+}
