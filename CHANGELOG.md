@@ -4,6 +4,22 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-08-02
+
+### Changed
+- Updated `jsonwebtoken` to `11`, `p256` (dev-dependency) to `0.14`, and
+  `base64` (dev-dependency) to `0.23`. No API changes; adopters do not
+  need to change any code.
+- `rsa` (dev-dependency) stays on `0.9` — `0.10` has no stable release
+  on crates.io yet (only release candidates), so the bump is deferred
+  until a stable `0.10` lands.
+
+### Fixed
+- Updated the ES256 test's P-256 keypair generation for `p256` 0.14's
+  API changes: `SecretKey::random` is deprecated in favour of the
+  `Generate` trait's `generate()`, and `ToEncodedPoint` was renamed to
+  `ToSec1Point`.
+
 ## [0.2.0] — 2026-04-23
 
 ### Changed
@@ -46,5 +62,6 @@ Incorrectly published as `0.1.0` from the standalone repository when the
 crates.io from the embedded copy in `turul-a2a`. Yanked in favour of
 `0.2.0`.
 
+[0.2.1]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.2.1
 [0.2.0]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.1.0

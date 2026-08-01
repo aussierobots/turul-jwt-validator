@@ -299,13 +299,14 @@ async fn extra_claims_captured() {
 
 fn generate_ec_keypair(kid: &str) -> (String, serde_json::Value) {
     use p256::SecretKey;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::Generate;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::pkcs8::{EncodePrivateKey, LineEnding};
 
-    // Reuse the rand_core 0.6 OsRng surfaced by rsa — p256 0.13 is
-    // built against the same rand_core version, so no version skew.
-    let mut rng = rsa::rand_core::OsRng;
-    let secret = SecretKey::random(&mut rng);
+    // `SecretKey::random` is deprecated in favour of `Generate`, whose
+    // `generate()` draws from the system's ambient CSPRNG directly —
+    // no rng plumbing (and no rand_core version skew with rsa) needed.
+    let secret = SecretKey::generate();
 
     let pem = secret
         .to_pkcs8_pem(LineEnding::LF)
@@ -313,7 +314,7 @@ fn generate_ec_keypair(kid: &str) -> (String, serde_json::Value) {
         .to_string();
 
     // Uncompressed SEC1 encoding: 0x04 || X (32 bytes) || Y (32 bytes).
-    let encoded = secret.public_key().to_encoded_point(false);
+    let encoded = secret.public_key().to_sec1_point(false);
     let bytes = encoded.as_bytes();
     assert_eq!(bytes[0], 0x04, "expected uncompressed point prefix");
     assert_eq!(bytes.len(), 65, "expected 65-byte uncompressed P-256 point");
