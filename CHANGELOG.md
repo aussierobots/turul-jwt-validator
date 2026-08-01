@@ -4,6 +4,27 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-08-02
+
+### Added
+- `aws_lc_rs` and `rust_crypto` Cargo features, mirroring
+  `jsonwebtoken` 11's own crypto-backend feature names and forwarding
+  to them directly. `aws_lc_rs` remains the default, so existing
+  consumers see zero change. Select the pure-Rust backend instead with
+  `default-features = false, features = ["rust_crypto"]`.
+
+### Fixed
+- Previously the `jsonwebtoken` dependency hardcoded `features =
+  ["aws_lc_rs"]` without disabling jsonwebtoken's default features,
+  forcing that backend on every consumer. Because Cargo unifies a
+  dependency's enabled features across an entire workspace lockfile,
+  any workspace where another member also depends on `jsonwebtoken`
+  with `rust_crypto` got both backends' features unified into one
+  `Cargo.lock` — silently affecting every workspace member that
+  depends on `jsonwebtoken` transitively, including ones with no
+  relationship to this crate at all. Making the backend selectable
+  (and no longer forced) removes that cross-workspace contamination.
+
 ## [0.3.1] — 2026-08-02
 
 ### Added
@@ -127,6 +148,7 @@ Incorrectly published as `0.1.0` from the standalone repository when the
 crates.io from the embedded copy in `turul-a2a`. Yanked in favour of
 `0.2.0`.
 
+[0.3.2]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.3.2
 [0.3.1]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.3.1
 [0.3.0]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.3.0
 [0.2.1]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.2.1

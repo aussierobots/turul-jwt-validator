@@ -1,6 +1,6 @@
 [package]
 name = "turul-jwt-validator"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Nick Hortovanyi <nick@aussierobots.com.au>"]
@@ -11,8 +11,17 @@ homepage = "https://github.com/aussierobots/turul-jwt-validator"
 keywords = ["jwt", "jwks", "auth", "oauth", "validation"]
 categories = ["authentication", "web-programming"]
 
+[features]
+default = ["aws_lc_rs"]
+## AWS-LC crypto backend for jsonwebtoken (default).
+aws_lc_rs = ["jsonwebtoken/aws_lc_rs"]
+## Pure-Rust (RustCrypto) crypto backend for jsonwebtoken, as an
+## alternative to aws_lc_rs. Use `default-features = false, features =
+## ["rust_crypto"]` to select this backend instead.
+rust_crypto = ["jsonwebtoken/rust_crypto"]
+
 [dependencies]
-jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

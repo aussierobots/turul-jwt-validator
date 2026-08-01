@@ -6,10 +6,18 @@ needs to verify bearer tokens against a JWKS endpoint.
 
 ## Features
 
-- Signature verification via [`jsonwebtoken`] with the `aws_lc_rs`
-  backend.
+- Signature verification via [`jsonwebtoken`], with a selectable crypto
+  backend — mirrors `jsonwebtoken`'s own `aws_lc_rs` / `rust_crypto`
+  Cargo features so this crate doesn't force a backend choice (and its
+  lockfile-unifying `Cargo.lock` features) onto every workspace member,
+  including ones that don't even depend on it.
+  - **`aws_lc_rs`** (default) — the AWS-LC backend.
+  - **`rust_crypto`** — the pure-Rust (RustCrypto) backend instead.
+    Select it with `default-features = false, features =
+    ["rust_crypto"]`. Both backends build and pass the full test suite
+    (`cargo test --no-default-features --features rust_crypto`).
   - **Default allowlist:** `RS256`, `ES256`. Both exercised by the
-    integration suite.
+    integration suite under both backends.
   - **Opt-in via `.with_algorithms(...)`:** `RS384`, `RS512`, `ES384`.
     Code paths exist and the JWKS parser accepts them, but integration
     coverage is RS256 + ES256 only. Adopters that enable the extras
