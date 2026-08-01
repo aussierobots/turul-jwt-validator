@@ -140,6 +140,7 @@ pub struct JwtValidator {
     refresh_interval: Duration,
     stale_window: Duration,
     retry: Option<RetryConfig>,
+    max_age: Option<Duration>,
     http_client: reqwest::Client,
 }
 
@@ -154,6 +155,7 @@ impl JwtValidator {
             refresh_interval: Duration::from_secs(60),
             stale_window: Duration::ZERO,
             retry: None,
+            max_age: None,
             http_client: reqwest::Client::new(),
         }
     }
@@ -193,6 +195,26 @@ impl JwtValidator {
             attempts: attempts.max(1),
             base_delay,
         });
+        self
+    }
+
+    /// Maximum age a cached key may be trusted on a `kid`-hit before a
+    /// refresh is attempted, measured from the last successful fetch. A
+    /// cache hit past this age is treated the same as a cache miss:
+    /// `refresh_jwks` runs (subject to the existing `refresh_interval`
+    /// rate limit) before the key is returned, so a revoked key gets a
+    /// chance to be dropped instead of being trusted indefinitely.
+    /// Defaults to `None` — cached keys are trusted indefinitely on a
+    /// `kid`-hit, matching pre-existing behavior — unless called.
+    ///
+    /// Independent of `refresh_interval`: this governs how long a key may
+    /// be trusted; `refresh_interval` governs how often a refetch attempt
+    /// is allowed to actually fire. If a max-age-triggered refresh gets
+    /// skipped by the `refresh_interval` cooldown, the still-cached key is
+    /// served rather than erroring — the same outcome a kid-miss-triggered
+    /// refresh already produces when rate-limited.
+    pub fn with_max_age(mut self, max_age: Duration) -> Self {
+        self.max_age = Some(max_age);
         self
     }
 
@@ -251,17 +273,24 @@ impl JwtValidator {
         &self,
         kid: &str,
     ) -> Result<(DecodingKey, Algorithm), JwtValidationError> {
-        // Try cache first
+        // Try cache first — a hit past `max_age` (if configured) is treated
+        // as a miss below, so the key gets a chance to be refreshed/revoked
+        // instead of being trusted indefinitely.
         {
             let cache = self.cached_jwks.read().await;
             if let Some(ref cached) = *cache {
                 if let Some((key, alg)) = cached.keys.get(kid) {
-                    return Ok((key.clone(), *alg));
+                    let past_max_age = self
+                        .max_age
+                        .is_some_and(|max_age| cached.last_refresh_at.elapsed() >= max_age);
+                    if !past_max_age {
+                        return Ok((key.clone(), *alg));
+                    }
                 }
             }
         }
 
-        // Cache miss — refresh JWKS
+        // Cache miss, or cache hit past max_age — refresh JWKS
         self.refresh_jwks().await?;
 
         // Try again

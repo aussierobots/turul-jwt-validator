@@ -4,6 +4,26 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-08-02
+
+### Added
+- `.with_max_age(Duration)` — revocation safety-net. On a `kid`-hit, if
+  the cached key is older than `max_age` (measured from the last
+  successful fetch), it's treated the same as a cache miss: a refresh
+  is attempted before the key is returned, instead of trusting a
+  cached key with a matching `kid` indefinitely. Independent of
+  `refresh_interval` (which rate-limits how often a refetch attempt
+  may fire, not how long a key may be trusted) and unaffected by
+  `stale_window` (which only governs what happens when a refresh
+  attempt fails). A max-age-triggered refresh that gets skipped by the
+  `refresh_interval` cooldown still serves the cached key rather than
+  erroring — the same outcome a kid-miss-triggered refresh already
+  produces when rate-limited — and, if `.with_retry(...)` is
+  configured, goes through the same retry/backoff/timeout path as any
+  other refresh. Defaults to unset — cached keys are trusted
+  indefinitely on a `kid`-hit, matching pre-existing behavior — so
+  existing consumers see no change unless they opt in.
+
 ## [0.3.0] — 2026-08-02
 
 ### Added
@@ -107,6 +127,7 @@ Incorrectly published as `0.1.0` from the standalone repository when the
 crates.io from the embedded copy in `turul-a2a`. Yanked in favour of
 `0.2.0`.
 
+[0.3.1]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.3.1
 [0.3.0]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.3.0
 [0.2.1]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.2.1
 [0.2.0]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.2.0

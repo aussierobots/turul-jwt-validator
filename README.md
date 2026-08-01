@@ -44,6 +44,13 @@ call the corresponding builder method:
   `HttpStatus(u16)` / `InvalidJson` / `NoSigningKeys`) alongside the
   `message`, so callers can build log/alert filters without
   string-matching.
+- **`.with_max_age(Duration)`** — revocation safety-net. Even on a
+  `kid`-hit, if the cached key is older than this, treat it like a
+  cache miss and attempt a refresh before serving it (subject to the
+  existing `refresh_interval` rate limit — a refresh skipped by that
+  cooldown still serves the cached key rather than erroring). Defaults
+  to unset: a cached key with a matching `kid` is trusted indefinitely,
+  matching pre-existing behavior.
 
 ## Usage
 

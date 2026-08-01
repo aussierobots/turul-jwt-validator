@@ -1,6 +1,6 @@
 //! Resilience-behavior tests for `JwtValidator`'s JWKS fetch/cache engine:
-//! stale-while-revalidate, bounded retry with backoff, and structured
-//! fetch-error categorization.
+//! stale-while-revalidate, bounded retry with backoff, structured
+//! fetch-error categorization, and the max_age revocation safety-net.
 //!
 //! Uses a hand-rolled axum + `tokio::net::TcpListener` mock server (rather
 //! than wiremock) so handlers can carry shared atomic state — request
@@ -376,4 +376,115 @@ async fn spawn_slow_jwks_server(delay: Duration) -> String {
         axum::serve(listener, app).await.ok();
     });
     format!("http://127.0.0.1:{}/.well-known/jwks.json", addr.port())
+}
+
+// =========================================================
+// max_age revocation safety-net — cache hits past max_age
+// are treated like a cache miss and trigger a refresh.
+// =========================================================
+
+/// Spawn a mock JWKS server that always serves `body` and counts requests.
+async fn spawn_counting_jwks_server(body: serde_json::Value) -> (String, Arc<AtomicUsize>) {
+    let count = Arc::new(AtomicUsize::new(0));
+    let counter = count.clone();
+    let jwks_url = spawn_mock_jwks_server(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        axum::Json(body.clone()).into_response()
+    })
+    .await;
+    (jwks_url, count)
+}
+
+#[tokio::test]
+async fn max_age_fresh_cache_hit_makes_zero_fetch_calls() {
+    let (pem, jwks) = generate_rsa_keypair("cached-key");
+    let (jwks_url, count) = spawn_counting_jwks_server(jwks).await;
+
+    let validator = JwtValidator::new(jwks_url, "test-audience")
+        .with_refresh_interval(Duration::from_millis(10))
+        .with_max_age(Duration::from_secs(60));
+
+    let claims = json!({"sub": "u", "aud": "test-audience", "exp": now_epoch() + 3600});
+    let token = sign_token(&pem, "cached-key", &claims);
+
+    validator
+        .validate(&token)
+        .await
+        .expect("initial fetch should succeed");
+    let after_warm_up = count.load(Ordering::SeqCst);
+
+    validator
+        .validate(&token)
+        .await
+        .expect("second validate within max_age should still succeed");
+
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        after_warm_up,
+        "expected zero additional fetch calls for a cache hit within max_age"
+    );
+}
+
+#[tokio::test]
+async fn max_age_expired_cache_hit_triggers_exactly_one_refresh() {
+    let (pem, jwks) = generate_rsa_keypair("cached-key");
+    let (jwks_url, count) = spawn_counting_jwks_server(jwks).await;
+
+    let validator = JwtValidator::new(jwks_url, "test-audience")
+        .with_refresh_interval(Duration::from_millis(1))
+        .with_max_age(Duration::from_millis(20));
+
+    let claims = json!({"sub": "u", "aud": "test-audience", "exp": now_epoch() + 3600});
+    let token = sign_token(&pem, "cached-key", &claims);
+
+    validator
+        .validate(&token)
+        .await
+        .expect("initial fetch should succeed");
+    let after_warm_up = count.load(Ordering::SeqCst);
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    validator
+        .validate(&token)
+        .await
+        .expect("validate past max_age should still succeed");
+
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        after_warm_up + 1,
+        "expected exactly one refresh call once max_age elapsed"
+    );
+}
+
+#[tokio::test]
+async fn max_age_expired_cache_hit_rate_limited_by_refresh_interval_serves_stale_key() {
+    let (pem, jwks) = generate_rsa_keypair("cached-key");
+    let (jwks_url, count) = spawn_counting_jwks_server(jwks).await;
+
+    let validator = JwtValidator::new(jwks_url, "test-audience")
+        .with_refresh_interval(Duration::from_secs(60))
+        .with_max_age(Duration::from_millis(20));
+
+    let claims = json!({"sub": "u", "aud": "test-audience", "exp": now_epoch() + 3600});
+    let token = sign_token(&pem, "cached-key", &claims);
+
+    validator
+        .validate(&token)
+        .await
+        .expect("initial fetch should succeed");
+    let after_warm_up = count.load(Ordering::SeqCst);
+
+    // Past max_age, but well within the 60s refresh_interval cooldown.
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let claims = validator
+        .validate(&token)
+        .await
+        .expect("rate-limited max_age refresh should still serve the stale cached key");
+    assert_eq!(claims.sub, "u");
+
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        after_warm_up,
+        "expected zero additional fetch calls — refresh_interval cooldown should block the refetch attempt"
+    );
 }
