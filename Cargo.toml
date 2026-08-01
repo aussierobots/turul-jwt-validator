@@ -1,6 +1,6 @@
 [package]
 name = "turul-jwt-validator"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Nick Hortovanyi <nick@aussierobots.com.au>"]
@@ -16,12 +16,13 @@ jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "time"] }
 tracing = "0.1"
 thiserror = "2.0"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
+axum = "0.8"
 rsa = { version = "0.9", features = ["pem"] }
 p256 = { version = "0.14", features = ["pem", "pkcs8"] }
 rand = "0.10"

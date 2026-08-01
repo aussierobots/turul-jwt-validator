@@ -25,12 +25,35 @@ pub enum JwtValidationError {
     InvalidIssuer,
     #[error("Unsupported algorithm: {0}")]
     UnsupportedAlgorithm(String),
-    #[error("JWKS fetch error: {0}")]
-    JwksFetchError(String),
+    #[error("JWKS fetch error: {message}")]
+    JwksFetchError {
+        kind: JwksFetchErrorKind,
+        message: String,
+    },
     #[error("Key not found: {0}")]
     KeyNotFound(String),
     #[error("Decoding error: {0}")]
     DecodingError(String),
+}
+
+/// Categorized cause of a JWKS fetch failure.
+///
+/// Lets consumers build log/alert filters (e.g. distinguish an
+/// auth-server outage from a key-rotation/config problem) without
+/// string-matching on [`JwtValidationError`]'s `Display` output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum JwksFetchErrorKind {
+    /// Overall fetch (including retries) exceeded its timeout ceiling.
+    Timeout,
+    /// The HTTP request itself failed (DNS, TLS, connection reset, etc).
+    Transport,
+    /// The JWKS endpoint responded with a non-2xx HTTP status.
+    HttpStatus(u16),
+    /// The response body did not parse as JWKS JSON.
+    InvalidJson,
+    /// The JWKS parsed but contained no usable signing keys.
+    NoSigningKeys,
 }
 
 /// Validated token claims extracted from a JWT.
@@ -77,6 +100,34 @@ struct CachedJwks {
     last_refresh_at: Instant,
 }
 
+/// Bounded-retry configuration for JWKS fetches.
+#[derive(Debug, Clone, Copy)]
+struct RetryConfig {
+    attempts: usize,
+    base_delay: Duration,
+}
+
+impl RetryConfig {
+    /// Overall timeout ceiling for the whole retry loop: the sum of
+    /// exponential backoff delays between attempts (base_delay, then
+    /// doubling), plus one base_delay of request-time headroom per
+    /// attempt. Derived purely from the caller's own configuration — no
+    /// fixed protocol-specific constants — so it stays proportional to
+    /// what was actually asked for.
+    fn ceiling(&self) -> Duration {
+        let mut ceiling = Duration::ZERO;
+        let mut delay = self.base_delay;
+        for attempt in 0..self.attempts {
+            if attempt > 0 {
+                ceiling += delay;
+                delay = delay.saturating_mul(2);
+            }
+            ceiling += self.base_delay;
+        }
+        ceiling
+    }
+}
+
 /// JWT validator with JWKS caching and kid-miss refresh.
 ///
 /// Supports RS256 and ES256 by default. Rate-limits JWKS fetches.
@@ -87,6 +138,8 @@ pub struct JwtValidator {
     issuer: Option<String>,
     audience: Option<String>,
     refresh_interval: Duration,
+    stale_window: Duration,
+    retry: Option<RetryConfig>,
     http_client: reqwest::Client,
 }
 
@@ -99,6 +152,8 @@ impl JwtValidator {
             issuer: None,
             audience: Some(audience.into()),
             refresh_interval: Duration::from_secs(60),
+            stale_window: Duration::ZERO,
+            retry: None,
             http_client: reqwest::Client::new(),
         }
     }
@@ -115,6 +170,29 @@ impl JwtValidator {
 
     pub fn with_refresh_interval(mut self, interval: Duration) -> Self {
         self.refresh_interval = interval;
+        self
+    }
+
+    /// How long a cached JWKS may keep being served after a failed refresh,
+    /// measured from the last successful fetch. Defaults to
+    /// [`Duration::ZERO`] — no stale-serve, matching pre-existing behavior
+    /// where a refresh failure always propagates.
+    pub fn with_stale_window(mut self, window: Duration) -> Self {
+        self.stale_window = window;
+        self
+    }
+
+    /// Retry a failed JWKS fetch up to `attempts` times (>=1), with
+    /// exponential backoff starting at `base_delay` between attempts. The
+    /// whole retry loop is wrapped in an overall timeout ceiling derived
+    /// from `attempts` and `base_delay`, so a slow/hanging endpoint can't
+    /// block indefinitely. Defaults to `None` — a single attempt with no
+    /// backoff or ceiling, matching pre-existing behavior — unless called.
+    pub fn with_retry(mut self, attempts: usize, base_delay: Duration) -> Self {
+        self.retry = Some(RetryConfig {
+            attempts: attempts.max(1),
+            base_delay,
+        });
         self
     }
 
@@ -211,17 +289,112 @@ impl JwtValidator {
 
         debug!("Fetching JWKS from {}", self.jwks_uri);
 
+        match self.fetch_jwks_with_retry().await {
+            Ok(keys) => {
+                let now = Instant::now();
+                *self.cached_jwks.write().await = Some(CachedJwks {
+                    keys,
+                    last_refresh_at: now,
+                });
+                Ok(())
+            }
+            Err(err) => {
+                let cache = self.cached_jwks.read().await;
+                if let Some(ref cached) = *cache {
+                    if cached.last_refresh_at.elapsed() <= self.stale_window {
+                        warn!(
+                            "JWKS refresh failed ({err}); serving stale cache (age {:?}, within stale window)",
+                            cached.last_refresh_at.elapsed()
+                        );
+                        return Ok(());
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Fetch JWKS, retrying per `self.retry` if configured. With no retry
+    /// configured, makes exactly one attempt and propagates its error
+    /// directly (today's behavior, unbounded by any timeout).
+    async fn fetch_jwks_with_retry(
+        &self,
+    ) -> Result<HashMap<String, (DecodingKey, Algorithm)>, JwtValidationError> {
+        let Some(retry) = self.retry else {
+            return self.fetch_jwks_once().await;
+        };
+
+        let ceiling = retry.ceiling();
+        if ceiling.is_zero() {
+            return self.fetch_jwks_with_retry_inner(retry).await;
+        }
+
+        match tokio::time::timeout(ceiling, self.fetch_jwks_with_retry_inner(retry)).await {
+            Ok(result) => result,
+            Err(_) => Err(JwtValidationError::JwksFetchError {
+                kind: JwksFetchErrorKind::Timeout,
+                message: format!("JWKS fetch timed out after {ceiling:?}"),
+            }),
+        }
+    }
+
+    /// Retry loop: up to `retry.attempts` calls to `fetch_jwks_once`,
+    /// sleeping an exponentially-doubling backoff (starting at
+    /// `retry.base_delay`) between attempts.
+    async fn fetch_jwks_with_retry_inner(
+        &self,
+        retry: RetryConfig,
+    ) -> Result<HashMap<String, (DecodingKey, Algorithm)>, JwtValidationError> {
+        let mut delay = retry.base_delay;
+        let mut last_err = None;
+
+        for attempt in 0..retry.attempts {
+            if attempt > 0 {
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2);
+            }
+            match self.fetch_jwks_once().await {
+                Ok(keys) => return Ok(keys),
+                Err(e) => {
+                    warn!("JWKS fetch attempt {} failed: {e}", attempt + 1);
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        Err(last_err.expect("retry loop ran without recording an error"))
+    }
+
+    /// Single JWKS fetch attempt: request, status check, JSON parse, and
+    /// key parsing. No retry or rate-limiting — callers own that.
+    async fn fetch_jwks_once(
+        &self,
+    ) -> Result<HashMap<String, (DecodingKey, Algorithm)>, JwtValidationError> {
         let response = self
             .http_client
             .get(&self.jwks_uri)
             .send()
             .await
-            .map_err(|e| JwtValidationError::JwksFetchError(e.to_string()))?;
+            .map_err(|e| JwtValidationError::JwksFetchError {
+                kind: JwksFetchErrorKind::Transport,
+                message: e.to_string(),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(JwtValidationError::JwksFetchError {
+                kind: JwksFetchErrorKind::HttpStatus(status.as_u16()),
+                message: format!("JWKS endpoint returned HTTP {}", status.as_u16()),
+            });
+        }
 
         let jwks: JwksResponse = response
             .json()
             .await
-            .map_err(|e| JwtValidationError::JwksFetchError(format!("Invalid JWKS JSON: {e}")))?;
+            .map_err(|e| JwtValidationError::JwksFetchError {
+                kind: JwksFetchErrorKind::InvalidJson,
+                message: format!("Invalid JWKS JSON: {e}"),
+            })?;
 
         let mut keys = HashMap::new();
 
@@ -271,15 +444,16 @@ impl JwtValidator {
             }
         }
 
+        if keys.is_empty() {
+            return Err(JwtValidationError::JwksFetchError {
+                kind: JwksFetchErrorKind::NoSigningKeys,
+                message: "JWKS response contained no usable signing keys".to_string(),
+            });
+        }
+
         debug!("JWKS loaded: {} keys", keys.len());
 
-        let now = Instant::now();
-        *self.cached_jwks.write().await = Some(CachedJwks {
-            keys,
-            last_refresh_at: now,
-        });
-
-        Ok(())
+        Ok(keys)
     }
 }
 
@@ -326,13 +500,40 @@ mod tests {
             JwtValidationError::InvalidAudience,
             JwtValidationError::InvalidIssuer,
             JwtValidationError::UnsupportedAlgorithm("HS256".into()),
-            JwtValidationError::JwksFetchError("network".into()),
+            JwtValidationError::JwksFetchError {
+                kind: JwksFetchErrorKind::Transport,
+                message: "network".into(),
+            },
             JwtValidationError::KeyNotFound("kid-1".into()),
             JwtValidationError::DecodingError("corrupt".into()),
         ];
         // All should have non-empty display
         for err in &errors {
             assert!(!err.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn jwks_fetch_error_display_preserves_message_text() {
+        let err = JwtValidationError::JwksFetchError {
+            kind: JwksFetchErrorKind::Transport,
+            message: "connection refused".to_string(),
+        };
+        assert_eq!(err.to_string(), "JWKS fetch error: connection refused");
+    }
+
+    #[test]
+    fn jwks_fetch_error_kind_is_matchable() {
+        let err = JwtValidationError::JwksFetchError {
+            kind: JwksFetchErrorKind::HttpStatus(503),
+            message: "JWKS endpoint returned HTTP 503".to_string(),
+        };
+        match err {
+            JwtValidationError::JwksFetchError {
+                kind: JwksFetchErrorKind::HttpStatus(code),
+                ..
+            } => assert_eq!(code, 503),
+            other => panic!("expected HttpStatus(503), got {other:?}"),
         }
     }
 

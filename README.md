@@ -24,6 +24,27 @@ needs to verify bearer tokens against a JWKS endpoint.
   algorithm-confusion attacks where a caller submits an HS256
   token using a public key as the HMAC secret.
 
+### Resilience (opt-in)
+
+These are off by default — existing behavior is unchanged unless you
+call the corresponding builder method:
+
+- **`.with_stale_window(Duration)`** — if a JWKS refresh fails, keep
+  serving the existing cached keys for up to this long (measured from
+  the last successful fetch) instead of propagating the error. Defaults
+  to `Duration::ZERO` (never stale-serve).
+- **`.with_retry(attempts, base_delay)`** — retry a failed JWKS fetch up
+  to `attempts` times, with exponential backoff starting at
+  `base_delay`. The whole retry loop is bounded by an overall timeout
+  ceiling derived from `attempts`/`base_delay`, so a hung endpoint can't
+  block indefinitely. Defaults to a single attempt with no backoff or
+  ceiling.
+- **`JwksFetchErrorKind`** — `JwtValidationError::JwksFetchError` now
+  carries a `#[non_exhaustive]` `kind` (`Timeout` / `Transport` /
+  `HttpStatus(u16)` / `InvalidJson` / `NoSigningKeys`) alongside the
+  `message`, so callers can build log/alert filters without
+  string-matching.
+
 ## Usage
 
 ```rust

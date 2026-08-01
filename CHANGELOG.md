@@ -4,6 +4,51 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-08-02
+
+### Added
+- `.with_stale_window(Duration)` — stale-while-revalidate. If a JWKS
+  refresh fails and a cached JWKS exists within this window (measured
+  from the last successful fetch), the stale cache is served instead of
+  propagating the error (a `tracing::warn!` event is emitted so it's
+  observable). Defaults to `Duration::ZERO` — no stale-serve — so
+  existing consumers see no change unless they opt in.
+- `.with_retry(attempts, base_delay)` — bounded retry with exponential
+  backoff for JWKS fetches. The whole retry loop is wrapped in an
+  overall timeout ceiling derived from `attempts`/`base_delay`, so a
+  slow or hung JWKS endpoint can't block a fetch indefinitely. Defaults
+  to `None` (a single attempt, no backoff, no ceiling), matching
+  pre-existing behavior.
+- `JwksFetchErrorKind` — a `#[non_exhaustive]` categorized-cause enum
+  (`Timeout` / `Transport` / `HttpStatus(u16)` / `InvalidJson` /
+  `NoSigningKeys`) so consumers can build log/alert filters without
+  string-matching `JwtValidationError`'s `Display` output.
+- Integration test proving a JWKS response containing both an RSA and
+  an EC key in the same `keys` array deserializes and validates
+  correctly — guards against a JWK schema regression where `n`/`e` (or
+  `x`/`y`/`crv`) become required `String` fields instead of
+  `Option<String>`, which would break deserialization of the *entire*
+  response the moment a non-matching key type appears anywhere in the
+  array.
+
+### Changed
+- **Breaking:** `JwtValidationError::JwksFetchError` changed from a
+  tuple variant (`JwksFetchError(String)`) to a struct variant
+  (`JwksFetchError { kind: JwksFetchErrorKind, message: String }`).
+  The `Display` text (`"JWKS fetch error: {message}"`) is unchanged for
+  the pre-existing transport-failure and invalid-JSON-body paths, so
+  `err.to_string()` output is stable for those cases; code that
+  destructures the old tuple shape needs updating.
+- JWKS fetch failures are now categorized more precisely on *all* fetch
+  paths (not just when `.with_retry` is configured): a non-2xx HTTP
+  response is now `HttpStatus(code)` instead of being misreported as
+  `InvalidJson` (its body previously failed JSON parsing), and a JWKS
+  response with an empty/all-unusable `keys` array is now
+  `NoSigningKeys` instead of silently caching zero keys (which
+  previously surfaced as `KeyNotFound` on the next lookup instead of a
+  fetch error). Both were already failure paths before this change —
+  this only fixes which error variant and message they produce.
+
 ## [0.2.1] — 2026-08-02
 
 ### Changed
@@ -62,6 +107,7 @@ Incorrectly published as `0.1.0` from the standalone repository when the
 crates.io from the embedded copy in `turul-a2a`. Yanked in favour of
 `0.2.0`.
 
+[0.3.0]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.3.0
 [0.2.1]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.2.1
 [0.2.0]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aussierobots/turul-jwt-validator/releases/tag/v0.1.0

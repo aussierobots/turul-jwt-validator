@@ -369,6 +369,52 @@ async fn valid_es256_token_returns_claims() {
 }
 
 // =========================================================
+// Mixed key-type JWKS array — RSA and EC keys in the same
+// `keys` response must both deserialize and both validate.
+// A JWK schema that made `n`/`e` (or `x`/`y`/`crv`) required
+// `String` fields instead of `Option<String>` would fail to
+// deserialize the *whole* response the moment a non-matching
+// key type appears anywhere in the array.
+// =========================================================
+
+#[tokio::test]
+async fn mixed_rsa_and_ec_keys_in_one_jwks_both_validate() {
+    let (rsa_pem, rsa_jwks) = generate_rsa_keypair("mixed-rsa-key");
+    let (ec_pem, ec_jwks) = generate_ec_keypair("mixed-ec-key");
+
+    let mut rsa_keys = rsa_jwks["keys"].as_array().unwrap().clone();
+    let ec_keys = ec_jwks["keys"].as_array().unwrap().clone();
+    rsa_keys.extend(ec_keys);
+    let combined_jwks = json!({ "keys": rsa_keys });
+
+    let server = setup_jwks_server(&combined_jwks).await;
+
+    let validator = JwtValidator::new(
+        format!("{}/{}", server.uri(), ".well-known/jwks.json"),
+        "test-audience",
+    )
+    .with_refresh_interval(Duration::from_millis(100));
+
+    let rsa_claims = json!({
+        "sub": "user-rsa",
+        "aud": "test-audience",
+        "exp": now_epoch() + 3600,
+    });
+    let rsa_token = sign_token(&rsa_pem, "mixed-rsa-key", &rsa_claims);
+    let rsa_result = validator.validate(&rsa_token).await.unwrap();
+    assert_eq!(rsa_result.sub, "user-rsa");
+
+    let ec_claims = json!({
+        "sub": "user-ec",
+        "aud": "test-audience",
+        "exp": now_epoch() + 3600,
+    });
+    let ec_token = sign_ec_token(&ec_pem, "mixed-ec-key", &ec_claims);
+    let ec_result = validator.validate(&ec_token).await.unwrap();
+    assert_eq!(ec_result.sub, "user-ec");
+}
+
+// =========================================================
 // HS256 (symmetric) → UnsupportedAlgorithm. Defends against
 // algorithm-confusion attacks where an attacker submits an
 // HS256-signed token using a public key as the HMAC secret.
