@@ -1,5 +1,11 @@
 # turul-jwt-validator
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/turul/logo-dark.png">
+  <img src="docs/assets/turul/logo-light.png" alt="Turul JWT" width="600">
+</picture>
+
+
 Generic JWT validator with JWKS caching and `kid`-miss refresh. No
 protocol-specific dependencies — use it from any async Rust project that
 needs to verify bearer tokens against a JWKS endpoint.
@@ -137,3 +143,8 @@ the pin once `cargo-zigbuild` announces 0.16 compatibility.
 
 Dual-licensed under [MIT](./LICENSE-MIT) OR [Apache
 2.0](./LICENSE-APACHE) at your option.
+
+## Brand artwork
+
+Turul brand artwork is © 2026 Toast Technology Pty Ltd, all rights reserved,
+and is excluded from the software licence. See the [artwork notice](docs/assets/turul/ARTWORK-NOTICE.md) and [master assets](https://github.com/aussierobots/turul-brand).
