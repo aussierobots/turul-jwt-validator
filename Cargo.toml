@@ -7,9 +7,10 @@ authors = ["Nick Hortovanyi <nick@aussierobots.com.au>"]
 license = "MIT OR Apache-2.0"
 description = "Generic JWT validator with JWKS caching and kid-miss refresh"
 repository = "https://github.com/aussierobots/turul-jwt-validator"
-homepage = "https://github.com/aussierobots/turul-jwt-validator"
+homepage = "https://aussierobots.com.au/turul-jwt.html"
 keywords = ["jwt", "jwks", "auth", "oauth", "validation"]
 categories = ["authentication", "web-programming"]
+documentation = "https://docs.rs/turul-jwt-validator"
 
 [features]
 default = ["aws_lc_rs"]
