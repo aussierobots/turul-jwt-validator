@@ -472,13 +472,14 @@ impl JwtValidator {
             });
         }
 
-        let jwks: JwksResponse = response
-            .json()
-            .await
-            .map_err(|e| JwtValidationError::JwksFetchError {
-                kind: JwksFetchErrorKind::InvalidJson,
-                message: format!("Invalid JWKS JSON: {e}"),
-            })?;
+        let jwks: JwksResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| JwtValidationError::JwksFetchError {
+                    kind: JwksFetchErrorKind::InvalidJson,
+                    message: format!("Invalid JWKS JSON: {e}"),
+                })?;
 
         let mut keys = HashMap::new();
 

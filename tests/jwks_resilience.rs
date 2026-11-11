@@ -7,8 +7,8 @@
 //! counters, first-call/second-call behavior switches — needed to assert
 //! retry counts and backoff timing precisely.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
@@ -101,11 +101,7 @@ async fn fetch_error_categorizes_http_status() {
 
     let validator = JwtValidator::new(jwks_url, "test-audience");
     let claims = json!({"sub": "u", "aud": "test-audience", "exp": now_epoch() + 3600});
-    let token = sign_token(
-        &generate_rsa_keypair("any-kid").0,
-        "any-kid",
-        &claims,
-    );
+    let token = sign_token(&generate_rsa_keypair("any-kid").0, "any-kid", &claims);
 
     let err = validator.validate(&token).await.unwrap_err();
     let JwtValidationError::JwksFetchError { kind, .. } = err else {
@@ -248,8 +244,8 @@ async fn stale_window_default_zero_does_not_swallow_fetch_errors() {
     let (jwks_url, serve_good) = spawn_switchable_jwks_server(jwks).await;
 
     // No .with_stale_window(...) call — must reproduce today's behavior.
-    let validator =
-        JwtValidator::new(jwks_url, "test-audience").with_refresh_interval(Duration::from_millis(10));
+    let validator = JwtValidator::new(jwks_url, "test-audience")
+        .with_refresh_interval(Duration::from_millis(10));
 
     let claims = json!({"sub": "u1", "aud": "test-audience", "exp": now_epoch() + 3600});
     let token = sign_token(&pem, "cached-key", &claims);
