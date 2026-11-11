@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Point package homepages and project links to Aussie Robots; add explicit API documentation links and review discovery metadata.
+- Rewrite the crate-level docs (docs.rs front page): state the default `RS256`/`ES256` allowlist accurately, add a short example and feature table. Version 0.3.3 (patch; docs only, no API change).
 
 
 ## [0.3.2] — 2026-08-02
