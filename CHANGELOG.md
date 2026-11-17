@@ -4,6 +4,17 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] — 2026-11-18
+
+### Fixed
+
+- **Security:** `JwtValidator` accepted a token with no `aud` or no `iss` claim when an
+  audience or issuer was configured. jsonwebtoken only checks those claims when
+  present, so a validly signed, unexpired token without them passed. A missing
+  `aud` now returns `InvalidAudience` and a missing `iss` returns `InvalidIssuer`.
+  Tokens without those claims that were previously accepted are now rejected.
+  Regression tests: `missing_audience_claim_rejected`, `missing_issuer_claim_rejected`.
+
 ## [0.3.4] — 2026-11-17
 
 ### Added
