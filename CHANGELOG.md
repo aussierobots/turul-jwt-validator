@@ -4,7 +4,42 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.4] — 2026-11-17
+
+### Added
+
+- `detached` module: detached compact JWS (`header..signature`) sign and verify
+  for ES256, with no JWT claims, no JWKS and no network access. Enabled by the
+  new `detached_rust_crypto` and `detached_aws_lc_rs` features, which pull in
+  neither `reqwest` nor `tokio`.
+  - `check_public_jwk(&[u8])`: public P-256 JWK check (EC, P-256, 32-byte
+    on-curve `x`/`y`, no `d`; `alg`, `use` and `key_ops` checked if present).
+  - `inspect_detached`: the same structure and header checks as
+    `verify_detached`, in the same order with the same errors, without a key and
+    without the signature check. `verify_detached` calls the same check path.
+  - `verify_detached`: policy of exact `typ`, `alg` allowlist, `none`, `b64`,
+    `crit` and caller-named forbidden parameters, one error variant per rule.
+    Returns the protected header; never reads `aud`, `exp` or other claims.
+    Duplicate top-level header members are rejected. High-S signatures are
+    accepted.
+  - `sign_detached_es256`: PKCS#8 DER key, header `{alg, typ, kid}`.
+- `jwks` feature (default): `JwtValidator`, with `reqwest`, `tokio` and
+  `tracing`. `aws_lc_rs` and `rust_crypto` each imply it, so every existing
+  build, including `default-features = false, features = ["rust_crypto"]`,
+  is unchanged.
+- Optional dependencies `p256` and `base64`, present only under a `detached_*`
+  feature.
+- A `detached_*` feature combined with the other crypto backend is now a build
+  error (jsonwebtoken panics at runtime when both backends are on). Use
+  `default-features = false` and one backend feature.
+
+### Changed
+
+- `JwtValidator` moved to `src/validator.rs`, unchanged; public paths are the same.
+- `tests/jwt_e2e.rs`, `tests/jwks_resilience.rs` and `examples/validate-token.rs`
+  now declare `required-features = ["jwks"]`.
+
+## [0.3.3] — 2026-11-11
 
 ### Changed
 

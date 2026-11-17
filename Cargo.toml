@@ -1,6 +1,6 @@
 [package]
 name = "turul-jwt-validator"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Nick Hortovanyi <nick@aussierobots.com.au>"]
@@ -14,21 +14,41 @@ documentation = "https://docs.rs/turul-jwt-validator"
 
 [features]
 default = ["aws_lc_rs"]
+## JwtValidator and its JWKS fetching (reqwest, tokio). Implied by the backends.
+jwks = ["dep:reqwest", "dep:tokio", "dep:tracing"]
 ## AWS-LC crypto backend for jsonwebtoken (default).
-aws_lc_rs = ["jsonwebtoken/aws_lc_rs"]
+aws_lc_rs = ["jwks", "jsonwebtoken/aws_lc_rs"]
 ## Pure-Rust (RustCrypto) crypto backend for jsonwebtoken, as an
 ## alternative to aws_lc_rs. Use `default-features = false, features =
 ## ["rust_crypto"]` to select this backend instead.
-rust_crypto = ["jsonwebtoken/rust_crypto"]
+rust_crypto = ["jwks", "jsonwebtoken/rust_crypto"]
+## Detached JWS API with the RustCrypto backend; no reqwest or tokio.
+detached_rust_crypto = ["jsonwebtoken/rust_crypto", "dep:p256", "dep:base64"]
+## Detached JWS API with the AWS-LC backend; no reqwest or tokio.
+detached_aws_lc_rs = ["jsonwebtoken/aws_lc_rs", "dep:p256", "dep:base64"]
 
 [dependencies]
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["sync", "time"] }
-tracing = "0.1"
+tokio = { version = "1", features = ["sync", "time"], optional = true }
+tracing = { version = "0.1", optional = true }
 thiserror = "2.0"
+p256 = { version = "0.14", default-features = false, features = ["arithmetic"], optional = true }
+base64 = { version = "0.23", optional = true }
+
+[[test]]
+name = "jwt_e2e"
+required-features = ["jwks"]
+
+[[test]]
+name = "jwks_resilience"
+required-features = ["jwks"]
+
+[[example]]
+name = "validate-token"
+required-features = ["jwks"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
