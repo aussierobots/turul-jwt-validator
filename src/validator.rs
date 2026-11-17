@@ -1,3 +1,8 @@
+//! JWT validation against a cached, rate-limited JWKS.
+//!
+//! Provides [`JwtValidator`], its [`TokenClaims`] output, and the
+//! [`JwtValidationError`] and [`JwksFetchErrorKind`] error types.
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -10,23 +15,35 @@ use tracing::{debug, warn};
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum JwtValidationError {
+    /// The token failed validation for a reason with no dedicated variant, such as a bad signature.
     #[error("Invalid token: {0}")]
     InvalidToken(String),
+    /// The token's `exp` claim is more than 60 seconds in the past (jsonwebtoken's
+    /// default leeway).
     #[error("Token expired")]
     TokenExpired,
+    /// The token's `aud` claim is missing or does not contain the configured audience.
     #[error("Invalid audience")]
     InvalidAudience,
+    /// The token's `iss` claim is missing or does not match the configured issuer.
     #[error("Invalid issuer")]
     InvalidIssuer,
+    /// The token's algorithm is not allowed, or differs from the algorithm the JWKS key advertises.
     #[error("Unsupported algorithm: {0}")]
     UnsupportedAlgorithm(String),
+    /// Fetching the JWKS failed.
     #[error("JWKS fetch error: {message}")]
     JwksFetchError {
+        /// Categorized cause of the failure.
         kind: JwksFetchErrorKind,
+        /// Human-readable description of the failure.
         message: String,
     },
+    /// No key with the token's `kid` exists in the JWKS after a refresh attempt,
+    /// which the refresh-interval rate limit may have skipped.
     #[error("Key not found: {0}")]
     KeyNotFound(String),
+    /// The token header could not be decoded.
     #[error("Decoding error: {0}")]
     DecodingError(String),
 }
@@ -54,18 +71,22 @@ pub enum JwksFetchErrorKind {
 /// Validated token claims extracted from a JWT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenClaims {
+    /// Subject (`sub`) claim; empty if absent.
     #[serde(default)]
     pub sub: String,
+    /// Issuer (`iss`) claim; empty if absent.
     #[serde(default)]
     pub iss: String,
-    /// Audience — can be string or array in JWT.
+    /// Audience (`aud`) claim, which a JWT may encode as a string or an array.
     #[serde(default)]
     pub aud: serde_json::Value,
+    /// Expiration time (`exp`) as seconds since the Unix epoch; `0` if absent.
     #[serde(default)]
     pub exp: u64,
+    /// Issued-at time (`iat`) as seconds since the Unix epoch; `0` if absent.
     #[serde(default)]
     pub iat: u64,
-    /// Scopes (space-separated string).
+    /// Scopes (`scope`) as a space-separated string.
     #[serde(default)]
     pub scope: Option<String>,
     /// All other claims.
@@ -103,7 +124,7 @@ struct RetryConfig {
 }
 
 impl RetryConfig {
-    /// Overall timeout ceiling for the whole retry loop: the sum of
+    /// Returns the overall timeout ceiling for the whole retry loop: the sum of
     /// exponential backoff delays between attempts (base_delay, then
     /// doubling), plus one base_delay of request-time headroom per
     /// attempt. Derived purely from the caller's own configuration — no
@@ -140,6 +161,16 @@ pub struct JwtValidator {
 }
 
 impl JwtValidator {
+    /// Creates a validator for the JWKS at `jwks_uri` that requires the token's
+    /// `aud` claim to be present and contain `audience`.
+    ///
+    /// Defaults to RS256 and ES256, no issuer check, a 60-second refresh
+    /// interval, no stale-serve, no retry and no key max age.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `reqwest` cannot initialize its TLS backend or load the system
+    /// resolver configuration, as `reqwest::Client::new` does.
     pub fn new(jwks_uri: impl Into<String>, audience: impl Into<String>) -> Self {
         Self {
             jwks_uri: jwks_uri.into(),
@@ -155,36 +186,39 @@ impl JwtValidator {
         }
     }
 
+    /// Requires the token's `iss` claim to be present and equal `issuer`.
     pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
         self.issuer = Some(issuer.into());
         self
     }
 
+    /// Replaces the set of algorithms a token may use.
     pub fn with_algorithms(mut self, algorithms: Vec<Algorithm>) -> Self {
         self.allowed_algorithms = algorithms;
         self
     }
 
+    /// Sets the minimum time between JWKS fetch attempts.
     pub fn with_refresh_interval(mut self, interval: Duration) -> Self {
         self.refresh_interval = interval;
         self
     }
 
-    /// How long a cached JWKS may keep being served after a failed refresh,
+    /// Sets how long a cached JWKS may keep being served after a failed refresh,
     /// measured from the last successful fetch. Defaults to
-    /// [`Duration::ZERO`] — no stale-serve, matching pre-existing behavior
-    /// where a refresh failure always propagates.
+    /// [`Duration::ZERO`]: no stale-serve, so a refresh failure always
+    /// propagates.
     pub fn with_stale_window(mut self, window: Duration) -> Self {
         self.stale_window = window;
         self
     }
 
-    /// Retry a failed JWKS fetch up to `attempts` times (>=1), with
+    /// Retries a failed JWKS fetch up to `attempts` times (>=1), with
     /// exponential backoff starting at `base_delay` between attempts. The
     /// whole retry loop is wrapped in an overall timeout ceiling derived
     /// from `attempts` and `base_delay`, so a slow/hanging endpoint can't
-    /// block indefinitely. Defaults to `None` — a single attempt with no
-    /// backoff or ceiling, matching pre-existing behavior — unless called.
+    /// block indefinitely. Without this call, a fetch is a single attempt
+    /// with no backoff or ceiling.
     pub fn with_retry(mut self, attempts: usize, base_delay: Duration) -> Self {
         self.retry = Some(RetryConfig {
             attempts: attempts.max(1),
@@ -193,14 +227,13 @@ impl JwtValidator {
         self
     }
 
-    /// Maximum age a cached key may be trusted on a `kid`-hit before a
+    /// Sets the maximum age a cached key may be trusted on a `kid`-hit before a
     /// refresh is attempted, measured from the last successful fetch. A
-    /// cache hit past this age is treated the same as a cache miss:
-    /// `refresh_jwks` runs (subject to the existing `refresh_interval`
-    /// rate limit) before the key is returned, so a revoked key gets a
-    /// chance to be dropped instead of being trusted indefinitely.
-    /// Defaults to `None` — cached keys are trusted indefinitely on a
-    /// `kid`-hit, matching pre-existing behavior — unless called.
+    /// cache hit past this age is treated the same as a cache miss: a JWKS
+    /// refresh runs (subject to the `refresh_interval` rate limit) before
+    /// the key is returned, so a revoked key gets a chance to be dropped
+    /// instead of being trusted indefinitely. Without this call, cached keys
+    /// are trusted indefinitely on a `kid`-hit.
     ///
     /// Independent of `refresh_interval`: this governs how long a key may
     /// be trusted; `refresh_interval` governs how often a refetch attempt
@@ -213,7 +246,34 @@ impl JwtValidator {
         self
     }
 
-    /// Validate a JWT token and return the claims.
+    /// Validates a JWT and returns its claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JwtValidationError`]:
+    ///
+    /// - [`DecodingError`](JwtValidationError::DecodingError) if the token header cannot be decoded.
+    /// - [`UnsupportedAlgorithm`](JwtValidationError::UnsupportedAlgorithm) if the header
+    ///   algorithm is not in the allowed set.
+    /// - [`JwksFetchError`](JwtValidationError::JwksFetchError) if the key is not cached (or
+    ///   is past `max_age`) and the JWKS refresh fails outside the stale window.
+    /// - [`KeyNotFound`](JwtValidationError::KeyNotFound) if no key matches the token's
+    ///   `kid` (`"default"` when absent) after the refresh.
+    /// - [`UnsupportedAlgorithm`](JwtValidationError::UnsupportedAlgorithm) if the header
+    ///   algorithm differs from the algorithm the JWKS key advertises.
+    /// - [`InvalidToken`](JwtValidationError::InvalidToken) if the signature is invalid or
+    ///   the token is malformed.
+    /// - A required claim is missing. All required claims are checked together, in no fixed
+    ///   order: [`InvalidToken`](JwtValidationError::InvalidToken) for `exp`,
+    ///   [`InvalidAudience`](JwtValidationError::InvalidAudience) for `aud`, and
+    ///   [`InvalidIssuer`](JwtValidationError::InvalidIssuer) for `iss` when an issuer is
+    ///   configured.
+    /// - [`TokenExpired`](JwtValidationError::TokenExpired) if `exp` is more than 60 seconds
+    ///   in the past (jsonwebtoken's default leeway).
+    /// - [`InvalidIssuer`](JwtValidationError::InvalidIssuer) if an issuer is configured
+    ///   and `iss` does not match it.
+    /// - [`InvalidAudience`](JwtValidationError::InvalidAudience) if `aud` does not contain
+    ///   the configured audience.
     pub async fn validate(&self, token: &str) -> Result<TokenClaims, JwtValidationError> {
         let header = decode_header(token)
             .map_err(|e| JwtValidationError::DecodingError(format!("Invalid JWT header: {e}")))?;
@@ -228,7 +288,8 @@ impl JwtValidator {
         let kid = header.kid.as_deref().unwrap_or("default").to_string();
         let (key, jwks_alg) = self.get_decoding_key(&kid).await?;
 
-        // Cross-check: token algorithm must match JWKS-advertised algorithm
+        // The header's alg must match the key's own alg, so a token cannot pick
+        // the algorithm a key is verified under (algorithm confusion).
         if header.alg != jwks_alg {
             return Err(JwtValidationError::UnsupportedAlgorithm(format!(
                 "Token uses {:?} but JWKS key '{kid}' advertises {:?}",
@@ -295,10 +356,11 @@ impl JwtValidator {
             }
         }
 
-        // Cache miss, or cache hit past max_age — refresh JWKS
+        // A miss may mean the issuer rotated keys, and a hit past max_age may be
+        // a revoked key; either way, refresh before trusting the cache.
         self.refresh_jwks().await?;
 
-        // Try again
+        // Re-check without the max_age test: a refresh skipped by the rate limit must still serve the cached key.
         let cache = self.cached_jwks.read().await;
         if let Some(ref cached) = *cache {
             if let Some((key, alg)) = cached.keys.get(kid) {
@@ -310,7 +372,7 @@ impl JwtValidator {
     }
 
     async fn refresh_jwks(&self) -> Result<(), JwtValidationError> {
-        // Rate limit
+        // Skip the fetch inside refresh_interval so unknown-kid tokens cannot force unbounded refetches.
         {
             let cache = self.cached_jwks.read().await;
             if let Some(ref cached) = *cache {
@@ -348,9 +410,9 @@ impl JwtValidator {
         }
     }
 
-    /// Fetch JWKS, retrying per `self.retry` if configured. With no retry
+    /// Fetches JWKS, retrying per `self.retry` if configured. With no retry
     /// configured, makes exactly one attempt and propagates its error
-    /// directly (today's behavior, unbounded by any timeout).
+    /// directly, with no timeout.
     async fn fetch_jwks_with_retry(
         &self,
     ) -> Result<HashMap<String, (DecodingKey, Algorithm)>, JwtValidationError> {
@@ -372,7 +434,7 @@ impl JwtValidator {
         }
     }
 
-    /// Retry loop: up to `retry.attempts` calls to `fetch_jwks_once`,
+    /// Runs the retry loop: up to `retry.attempts` calls to `fetch_jwks_once`,
     /// sleeping an exponentially-doubling backoff (starting at
     /// `retry.base_delay`) between attempts.
     async fn fetch_jwks_with_retry_inner(
@@ -399,7 +461,7 @@ impl JwtValidator {
         Err(last_err.expect("retry loop ran without recording an error"))
     }
 
-    /// Single JWKS fetch attempt: request, status check, JSON parse, and
+    /// Performs a single JWKS fetch attempt: request, status check, JSON parse, and
     /// key parsing. No retry or rate-limiting — callers own that.
     async fn fetch_jwks_once(
         &self,

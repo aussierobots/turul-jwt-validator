@@ -13,7 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use turul_jwt_validator::JwtValidator;
 
-/// Generate an RSA keypair and return (private_key_pem, jwks_json with kid).
+/// Generates an RSA keypair and returns `(private_key_pem, jwks_json)` with the given kid.
 fn generate_rsa_keypair(kid: &str) -> (String, serde_json::Value) {
     use rsa::RsaPrivateKey;
 
@@ -51,7 +51,7 @@ fn generate_rsa_keypair(kid: &str) -> (String, serde_json::Value) {
     (private_pem.to_string(), jwks)
 }
 
-/// Sign a JWT with the given claims using the private key.
+/// Signs a JWT with the given claims using the private key.
 fn sign_token(private_pem: &str, kid: &str, claims: &serde_json::Value) -> String {
     let encoding_key = EncodingKey::from_rsa_pem(private_pem.as_bytes()).unwrap();
     let mut header = Header::new(Algorithm::RS256);

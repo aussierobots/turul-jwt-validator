@@ -1,5 +1,9 @@
-//! Detached compact JWS (`header..signature`) sign and verify, ES256 only.
-//! No network, no claims.
+//! Signs and verifies detached compact JWS (`header..signature`), ES256 only.
+//! Performs no network access and no claims validation.
+//!
+//! Available with the `detached_aws_lc_rs` feature, or with
+//! `detached_rust_crypto` and `default-features = false`. A detached feature
+//! cannot be combined with the other crypto backend.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, crypto};
@@ -37,50 +41,65 @@ impl<'de> Deserialize<'de> for StrictObject {
     }
 }
 
-/// Supported JWS algorithms.
+/// Lists the supported JWS algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum JwsAlg {
+    /// ECDSA over P-256 with SHA-256.
     Es256,
 }
 
-/// Header rules enforced by [`verify_detached`].
+/// Header rules enforced by [`inspect_detached`] and [`verify_detached`].
 #[derive(Debug, Clone, Copy)]
 pub struct DetachedJwsPolicy<'a> {
+    /// Required `typ` header value, compared byte for byte.
     pub expected_typ: &'a str,
+    /// Algorithms accepted in the `alg` header.
     pub allowed_algs: &'a [JwsAlg],
+    /// Header parameter names whose presence is rejected.
     pub forbidden_params: &'a [&'a str],
 }
 
-/// Detached JWS failures; one variant per rule.
+/// Describes detached JWS failures, one variant per rule.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DetachedJwsError {
+    /// The input is not `header..signature`, or the header or signature segment is not base64url.
     #[error("malformed detached JWS")]
     Malformed,
+    /// The protected header is not a JSON object, repeats a member, or lacks a string `alg`; also returned if signing cannot serialize the header.
     #[error("invalid protected header")]
     InvalidHeader,
+    /// The `typ` header is missing or differs from the policy value.
     #[error("typ missing or not the expected value")]
     TypMismatch,
+    /// The `alg` header is `none`.
     #[error("alg is none")]
     AlgNone,
+    /// The `alg` header is not ES256 or is not in the policy allowlist.
     #[error("alg not allowed")]
     AlgNotAllowed,
+    /// The `b64` header parameter is present.
     #[error("b64 header parameter present")]
     B64Present,
+    /// The `crit` header parameter is present.
     #[error("crit header parameter present")]
     CritPresent,
+    /// A header parameter listed in the policy is present; holds its name.
     #[error("forbidden header parameter: {0}")]
     ForbiddenParam(String),
+    /// The public JWK failed validation; holds the rule that failed.
     #[error("invalid public JWK: {0}")]
     InvalidJwk(String),
+    /// The signing key could not produce an ES256 signature.
     #[error("invalid signing key")]
     InvalidSigningKey,
+    /// The signature is not 64 bytes or does not verify.
     #[error("signature invalid")]
     SignatureInvalid,
 }
 
-/// A validated P-256 public key. Only constructible via [`check_public_jwk`].
+/// Holds a validated P-256 public key, constructible only via [`check_public_jwk`].
 pub struct Es256PublicKey(DecodingKey);
 
 fn jwk_err(m: &str) -> DetachedJwsError {
@@ -102,6 +121,15 @@ fn coord(jwk: &Map<String, Value>, name: &str) -> Result<Vec<u8>, DetachedJwsErr
 }
 
 /// Validates a public P-256 JWK (raw JSON) and returns the key.
+///
+/// # Errors
+///
+/// Returns [`DetachedJwsError::InvalidJwk`] when, checked in this order:
+/// the input is not JSON or not an object; the private member `d` is present;
+/// `kty` is not `EC`; `crv` is not `P-256`; `alg` is present and not `ES256`;
+/// `use` is present and not `sig`; `key_ops` is present and lacks `verify`;
+/// `x` or `y` is missing, not base64url, or not 32 bytes; the point is not on
+/// P-256; or the key is unusable.
 pub fn check_public_jwk(jwk_json: &[u8]) -> Result<Es256PublicKey, DetachedJwsError> {
     let v: Value = serde_json::from_slice(jwk_json).map_err(|_| jwk_err("not JSON"))?;
     let jwk = v.as_object().ok_or_else(|| jwk_err("not an object"))?;
@@ -212,6 +240,16 @@ fn check_header<'a>(
 /// `Ok` does not mean the signature is valid, or even well-formed: use it to
 /// report header violations before a key is available, then call
 /// [`verify_detached`].
+///
+/// # Errors
+///
+/// Returns, in the order checked: [`DetachedJwsError::Malformed`] if the input
+/// is not `header..signature` or the header is not base64url;
+/// [`DetachedJwsError::InvalidHeader`] if the header is not a JSON object,
+/// repeats a member, or lacks a string `alg`; [`DetachedJwsError::AlgNone`];
+/// [`DetachedJwsError::AlgNotAllowed`]; [`DetachedJwsError::B64Present`];
+/// [`DetachedJwsError::CritPresent`]; [`DetachedJwsError::ForbiddenParam`];
+/// and [`DetachedJwsError::TypMismatch`].
 pub fn inspect_detached(
     detached: &str,
     policy: &DetachedJwsPolicy<'_>,
@@ -225,6 +263,13 @@ pub fn inspect_detached(
 /// Duplicate top-level header members are rejected as `InvalidHeader`. High-S
 /// ECDSA signatures are accepted: a payload can therefore have two valid
 /// signature strings, so do not use the signature bytes as an identifier.
+///
+/// # Errors
+///
+/// Returns every error of [`inspect_detached`], in the same order, then
+/// [`DetachedJwsError::Malformed`] if the signature segment is not base64url,
+/// then [`DetachedJwsError::SignatureInvalid`] if the signature is not 64 bytes
+/// or does not verify over the header and `payload`.
 pub fn verify_detached(
     detached: &str,
     payload: &[u8],
@@ -245,6 +290,12 @@ struct SignHeader<'a> {
 }
 
 /// Signs `payload` with an ES256 PKCS#8 DER key; returns `header..signature`.
+///
+/// # Errors
+///
+/// Returns [`DetachedJwsError::InvalidHeader`] if the header cannot be
+/// serialized, then [`DetachedJwsError::InvalidSigningKey`] if `pkcs8_der`
+/// cannot produce an ES256 signature.
 pub fn sign_detached_es256(
     pkcs8_der: &[u8],
     typ: &str,
@@ -319,7 +370,7 @@ mod tests {
         assert_eq!(payload[..8], *b"{\"iss\":\"");
         let input = format!("{A3_H}.{A3_P}");
         assert_eq!(verify_raw(input.as_bytes(), A3_S, &a3_key()), Ok(()));
-        // Detached form: payload segment removed, supplied separately.
+        // A flipped payload bit must invalidate the signature.
         let mut bad = payload.clone();
         bad[2] ^= 1;
         let input = format!("{A3_H}.{}", B64.encode(&bad));

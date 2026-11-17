@@ -4,6 +4,19 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] — 2026-11-18
+
+### Changed
+
+- Documentation only; no code or behaviour change. Doc comments brought to rustdoc
+  and Rust API Guidelines standards: every public item documented, `# Errors` on
+  every fallible public function in code order, `# Panics` on `JwtValidator::new`,
+  third-person summary lines, `# Examples` heading, and why-not-what inline
+  comments. Corrected claims: `exp` has jsonwebtoken's 60-second leeway, a refresh
+  can be skipped by the rate limit, and the `jwks` feature also pulls in `tracing`.
+- docs.rs now builds with `aws_lc_rs` and `detached_aws_lc_rs`, so the `detached`
+  module is rendered alongside `JwtValidator`.
+
 ## [0.3.5] — 2026-11-18
 
 ### Fixed
