@@ -239,12 +239,16 @@ impl JwtValidator {
         let mut validation = Validation::new(header.alg);
         validation.validate_exp = true;
 
+        // jsonwebtoken checks `aud` and `iss` only when the claim is present, so
+        // a missing claim must be required explicitly or it bypasses the check.
         if let Some(ref iss) = self.issuer {
             validation.set_issuer(&[iss]);
+            validation.required_spec_claims.insert("iss".to_string());
         }
 
         if let Some(ref aud) = self.audience {
             validation.set_audience(&[aud]);
+            validation.required_spec_claims.insert("aud".to_string());
         } else {
             validation.validate_aud = false;
         }
@@ -258,6 +262,12 @@ impl JwtValidator {
                     JwtValidationError::InvalidAudience
                 }
                 jsonwebtoken::errors::ErrorKind::InvalidIssuer => JwtValidationError::InvalidIssuer,
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(claim) if claim == "aud" => {
+                    JwtValidationError::InvalidAudience
+                }
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(claim) if claim == "iss" => {
+                    JwtValidationError::InvalidIssuer
+                }
                 _ => JwtValidationError::InvalidToken(e.to_string()),
             })?;
 

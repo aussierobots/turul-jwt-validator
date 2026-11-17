@@ -450,3 +450,66 @@ async fn unsupported_algorithm_rejected() {
         "Expected UnsupportedAlgorithm, got: {err:?}"
     );
 }
+
+// =========================================================
+// Missing audience claim → rejected (configured audience must be present)
+// =========================================================
+
+#[tokio::test]
+async fn missing_audience_claim_rejected() {
+    let (pem, jwks) = generate_rsa_keypair("key-missing-aud");
+    let server = setup_jwks_server(&jwks).await;
+
+    let validator = JwtValidator::new(
+        format!("{}/{}", server.uri(), ".well-known/jwks.json"),
+        "expected-audience",
+    )
+    .with_refresh_interval(Duration::from_millis(100));
+
+    // Valid signature and exp, but no `aud` claim at all.
+    let claims = json!({
+        "sub": "user",
+        "exp": now_epoch() + 3600,
+    });
+
+    let token = sign_token(&pem, "key-missing-aud", &claims);
+    let err = validator.validate(&token).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            turul_jwt_validator::JwtValidationError::InvalidAudience
+        ),
+        "Expected InvalidAudience for missing aud, got: {err:?}"
+    );
+}
+
+// =========================================================
+// Missing issuer claim → rejected (configured issuer must be present)
+// =========================================================
+
+#[tokio::test]
+async fn missing_issuer_claim_rejected() {
+    let (pem, jwks) = generate_rsa_keypair("key-missing-iss");
+    let server = setup_jwks_server(&jwks).await;
+
+    let validator = JwtValidator::new(
+        format!("{}/{}", server.uri(), ".well-known/jwks.json"),
+        "expected-audience",
+    )
+    .with_issuer("https://expected-issuer.example")
+    .with_refresh_interval(Duration::from_millis(100));
+
+    // Correct audience and exp, but no `iss` claim at all.
+    let claims = json!({
+        "sub": "user",
+        "aud": "expected-audience",
+        "exp": now_epoch() + 3600,
+    });
+
+    let token = sign_token(&pem, "key-missing-iss", &claims);
+    let err = validator.validate(&token).await.unwrap_err();
+    assert!(
+        matches!(err, turul_jwt_validator::JwtValidationError::InvalidIssuer),
+        "Expected InvalidIssuer for missing iss, got: {err:?}"
+    );
+}
