@@ -19,7 +19,7 @@ use serde_json::json;
 
 use turul_jwt_validator::{JwksFetchErrorKind, JwtValidationError, JwtValidator};
 
-/// Generate an RSA keypair and return (private_key_pem, jwks_json with kid).
+/// Generates an RSA keypair and returns `(private_key_pem, jwks_json)` with the given kid.
 fn generate_rsa_keypair(kid: &str) -> (String, serde_json::Value) {
     use rsa::RsaPrivateKey;
 
@@ -64,7 +64,7 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
-/// Spawn a mock JWKS server backed by an arbitrary handler closure, returning
+/// Spawns a mock JWKS server backed by an arbitrary handler closure, returning
 /// its `/.well-known/jwks.json` URL.
 async fn spawn_mock_jwks_server<F>(handler: F) -> String
 where
@@ -185,7 +185,7 @@ async fn fetch_error_categorizes_transport_failure() {
 // Stale-while-revalidate
 // =========================================================
 
-/// Spawn a mock JWKS server that serves `good_body` while the returned flag
+/// Spawns a mock JWKS server that serves `good_body` while the returned flag
 /// is `true`, and a 503 once flipped to `false`.
 async fn spawn_switchable_jwks_server(
     good_body: serde_json::Value,
@@ -353,7 +353,7 @@ async fn retry_bounds_hanging_endpoint_by_ceiling() {
     );
 }
 
-/// Spawn a mock JWKS server whose single handler sleeps for `delay` before
+/// Spawns a mock JWKS server whose single handler sleeps for `delay` before
 /// responding, to simulate a hung/very slow endpoint.
 async fn spawn_slow_jwks_server(delay: Duration) -> String {
     use axum::{Router, routing::get};
@@ -379,7 +379,7 @@ async fn spawn_slow_jwks_server(delay: Duration) -> String {
 // are treated like a cache miss and trigger a refresh.
 // =========================================================
 
-/// Spawn a mock JWKS server that always serves `body` and counts requests.
+/// Spawns a mock JWKS server that always serves `body` and counts requests.
 async fn spawn_counting_jwks_server(body: serde_json::Value) -> (String, Arc<AtomicUsize>) {
     let count = Arc::new(AtomicUsize::new(0));
     let counter = count.clone();

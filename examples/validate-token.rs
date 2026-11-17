@@ -1,4 +1,4 @@
-//! Validate a JWT against a live JWKS endpoint.
+//! Validates a JWT against a live JWKS endpoint.
 //!
 //! Reads configuration from environment variables:
 //!   TURUL_JWKS      — JWKS endpoint URL (required)

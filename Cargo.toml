@@ -1,6 +1,6 @@
 [package]
 name = "turul-jwt-validator"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Nick Hortovanyi <nick@aussierobots.com.au>"]
@@ -14,18 +14,23 @@ documentation = "https://docs.rs/turul-jwt-validator"
 
 [features]
 default = ["aws_lc_rs"]
-## JwtValidator and its JWKS fetching (reqwest, tokio). Implied by the backends.
+## The `jwks` feature: `JwtValidator` and its JWKS fetching (reqwest, tokio, tracing). Implied by `aws_lc_rs` and `rust_crypto`.
 jwks = ["dep:reqwest", "dep:tokio", "dep:tracing"]
-## AWS-LC crypto backend for jsonwebtoken (default).
+## The `aws_lc_rs` feature: AWS-LC crypto backend for jsonwebtoken (default).
 aws_lc_rs = ["jwks", "jsonwebtoken/aws_lc_rs"]
-## Pure-Rust (RustCrypto) crypto backend for jsonwebtoken, as an
+## The `rust_crypto` feature: pure-Rust (RustCrypto) crypto backend for jsonwebtoken, as an
 ## alternative to aws_lc_rs. Use `default-features = false, features =
 ## ["rust_crypto"]` to select this backend instead.
 rust_crypto = ["jwks", "jsonwebtoken/rust_crypto"]
-## Detached JWS API with the RustCrypto backend; no reqwest or tokio.
+## The `detached_rust_crypto` feature: detached JWS API with the RustCrypto backend; no reqwest or tokio.
 detached_rust_crypto = ["jsonwebtoken/rust_crypto", "dep:p256", "dep:base64"]
-## Detached JWS API with the AWS-LC backend; no reqwest or tokio.
+## The `detached_aws_lc_rs` feature: detached JWS API with the AWS-LC backend; no reqwest or tokio.
 detached_aws_lc_rs = ["jsonwebtoken/aws_lc_rs", "dep:p256", "dep:base64"]
+
+[package.metadata.docs.rs]
+# Render JwtValidator and the detached module together, on one backend.
+no-default-features = true
+features = ["aws_lc_rs", "detached_aws_lc_rs"]
 
 [dependencies]
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem"] }

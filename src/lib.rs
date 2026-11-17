@@ -13,7 +13,7 @@
 //! attacks. The default allowlist is `RS256` and `ES256`; widen it with
 //! [`JwtValidator::with_algorithms`] to `RS384`, `RS512` or `ES384`.
 //!
-//! # Example
+//! # Examples
 //!
 //! ```toml
 //! [dependencies]
@@ -52,7 +52,7 @@
 //! |---|---|---|
 //! | `aws_lc_rs` | yes | AWS-LC crypto backend for `jsonwebtoken` |
 //! | `rust_crypto` | no | Pure-Rust crypto backend instead; use `default-features = false` |
-//! | `jwks` | via backends | [`JwtValidator`] (reqwest, tokio); implied by both backends |
+//! | `jwks` | via backends | [`JwtValidator`] (reqwest, tokio, tracing); implied by both backends |
 //! | `detached_aws_lc_rs`, `detached_rust_crypto` | no | `detached` module with that backend, without reqwest or tokio |
 //!
 //! # Where next
